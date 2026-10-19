@@ -311,7 +311,7 @@ mkdir -p results
 
 如果在交我算运行实验，推荐使用Slurm脚本在向计算节点提交任务。
 
-仓库的 [`slurm/`](slurm/README.md) 已提供 7 份 Lab 2 脚本，覆盖第 7.2 节的小规模检查和第 8.3～8.7 节的正式实验。
+仓库的 [`slurm/`](slurm/README.md) 已提供 7 份基础实验脚本，覆盖第 7.2 节的小规模检查和第 8.3～8.7 节的正式实验。Bonus 另提供 1 份脚本，使用方法见第 10 节。
 每份脚本在计算节点编译并运行，默认申请 CPU 队列的 **1 个节点、1 个进程、1 个 CPU 核心、3 小时**（`03:00:00`）。
 
 保存源码后，在登录节点进入本仓库根目录（包含 `CMakeLists.txt`、`src/` 和 `slurm/`），例如：
@@ -509,3 +509,101 @@ done
 4. `optimal` 在 `-O0`～`-O3` 下的 GFLOP/s 对比图。
 
 图中必须标明标题、横轴、纵轴、单位、矩阵规模和块大小。
+
+## 10. 奖励题目：进一步优化自己的矩阵乘法
+
+完成基础实验后，可查阅资料并使用 AI 辅助进一步开展单线程矩阵乘法优化。重点是提出优化假设、理解并检查代码、通过实验验证效果，而不是仅让 AI 生成一份代码。无需额外下载库源码，也不要求一定达到或超过高性能 BLAS；有依据地解释性能差距、无效尝试和适用范围，同样是有价值的结果。
+
+本题只研究 **CPU 单线程、双精度矩阵乘法**，不使用多线程或 GPU。SIMD 向量化属于单线程优化，可以使用。允许新增辅助函数、打包缓冲区、SIMD 内核和独立测试程序；第 6 节的基础任务要求仍按原规定执行，自己的矩阵乘法实现仍不得调用现成 GEMM。
+
+建议从以下方向选择两项或更多开展实验，不必全部实现：
+
+1. **多级缓存分块**：将单一块大小扩展为分别控制 `m`、`n`、`k` 方向的块大小，考虑 L1/L2/L3 缓存容量和数据复用；避免仅凭“块越大越好”选择参数。
+2. **数据打包（packing）**：把 A、B 的子块整理为微内核便于连续访问的布局，减少跨行访问和地址计算。比较打包带来的收益与额外复制成本，观察小矩阵是否反而变慢。
+3. **寄存器微内核与 SIMD/FMA**：设计不同形状的寄存器块，使用编译器自动向量化或当前 CPU 支持的向量指令；分析数据加载、累加依赖和寄存器不足导致的溢出到内存。
+4. **编译器与生成代码分析**：查看向量化报告和关键循环的汇编，检查预期的向量化是否发生。可在独立的 Bonus 构建中试验 `-O3`、`-march=native` 等选项，记录完整参数；使用机器相关选项时，说明代码适用的 CPU。
+5. **按规模选择实现**：为小矩阵采用较轻量的路径，为大矩阵采用打包与分块；测试不同微内核和分块参数，并处理不能整除块大小的边界。
+
+可以先阅读 [Goto/BLIS 矩阵乘法教学材料](https://www.cs.utexas.edu/~flame/laff/pfhp/week3-goto.html)，理解多级分块、微面板打包和微内核之间的关系。使用 GCC 时，可参考 [优化诊断选项说明](https://gcc.gnu.org/onlinedocs/gcc/Developer-Options.html)，通过 `-fopt-info-vec-optimized`、`-fopt-info-vec-missed` 检查向量化成功或失败的原因。
+
+**BLAS 对比对象与结论范围：**
+
+- 默认对比仓库自带的 `labblas`，无需安装任何库。它只是教学参考后端，超过它不能直接说明已经逼近 OpenBLAS、BLIS 或 MKL 等高性能库。
+- 若实验机器已经安装兼容的 OpenBLAS/CBLAS，可在另一个构建目录中启用 `-DLAB_USE_SYSTEM_BLAS=ON`，进一步探索与高性能库的差距。这个选项只链接已经安装的库，不会下载库；找不到时使用默认后端即可，不要求另行安装。
+- 使用外部库时，记录库名称、版本和线程配置，并通过该库的线程设置确认实际只使用一个线程。只申请一个 CPU 核心不能替代库的线程设置。
+
+对每个规模报告 `自己的 GFLOP/s / BLAS 的 GFLOP/s`，分析在哪些规模下接近、落后或超过对照，避免只展示最有利的一组数据。
+
+### 10.1 在哪里写代码
+
+基础实验仍在 `src/mygemm.c` 中完成；**进一步优化的代码写在 [`bonus/bonus_gemm.c`](bonus/bonus_gemm.c) 的 `bonus_gemm` 函数中**：
+
+```c
+void bonus_gemm(const double *a, const double *b_matrix, double *c,
+                int n, int block_size);
+```
+
+矩阵仍为按行优先存储的 `n × n` 的 `double` 方阵，计算 `C = C + A * B`。`block_size` 是调优参数，允许在函数内部使用多级分块；必须处理任意正整数尺寸，包括奇数、不能整除块大小的尾块和 `block_size > n`。可在本文件新增辅助函数，不要修改接口或调用现成 GEMM。
+
+| 文件 | 学生需要做什么 |
+| --- | --- |
+| [`bonus/baseline_gemm.c`](bonus/baseline_gemm.c) | 将基础实验中最好的实现复制到 `baseline_gemm`，补齐边界后冻结为对照。已有可运行的 `ikj` 示例，但它不代表你的基础实验最佳实现。 |
+| [`bonus/bonus_gemm.c`](bonus/bonus_gemm.c) | 先复制对照版本的代码，再在这里进行进一步优化。 |
+| [`bonus/gemm.h`](bonus/gemm.h) | 查看接口和输入约定，无需修改。 |
+| [`bonus/benchmark.c`](bonus/benchmark.c) | 已提供正确性检查和性能对比程序，通常无需修改。 |
+| [`bonus/run.sh`](bonus/run.sh) | Linux 下的一键编译、检查和测量脚本。 |
+| [`slurm/lab2-10-bonus.slurm`](slurm/lab2-10-bonus.slurm) | 交我算的单核心任务提交脚本。 |
+
+`bonus_gemm` 模板初始为空，运行会显示 `INVALID` 并以非零状态退出，这是正常行为。完成代码后，它会与冻结的 `baseline_gemm` 和未修改的 BLAS 同时接受检查。不要修改 `third_party/labblas/` 来改变对照结果或绕过检查。
+
+### 10.2 本地编译与测试（Linux）
+
+以下命令都从仓库根目录执行，只构建 Bonus 目标，不依赖基础实验函数是否已实现：
+
+```bash
+cmake -S . -B build-bonus -DLAB_BUILD_BONUS=ON -DLAB_USE_SYSTEM_BLAS=OFF
+cmake --build build-bonus --target bonus_gemm -j1
+
+# 先检查正确性：180 组小规模、块大小和输入模式组合。
+./build-bonus/bonus/bonus_gemm --check
+
+# 再测性能：n=512，块大小64，预热后测5次。
+./build-bonus/bonus/bonus_gemm 512 64 5
+```
+
+性能测试分别输出 `baseline`、`bonus` 和 `BLAS` 的耗时中位数、GFLOP/s、最大绝对误差，以及 `speedup_vs_baseline`（基础版本耗时 / Bonus 耗时）和 `bonus_over_BLAS`（Bonus 的 GFLOP/s / BLAS 的 GFLOP/s）。
+
+也可用一键脚本完成编译、正确性检查和小/中/大规模对比：
+
+```bash
+# 默认 b=64，重复5次，测试 n=128、512、1024、2048。
+bash bonus/run.sh
+
+# 自定义：b=32，重复7次，测试 n=128、512、1024。
+bash bonus/run.sh 32 7 128 512 1024
+```
+
+日志保存到 `results/bonus-local-时间-进程号/`，包含环境信息、实际构建命令、CMake 配置、正确性结果、每次测量和汇总结果。
+
+Bonus 默认以 `-O3` 编译。
+
+### 10.3 在交我算提交 Bonus 任务
+
+保存 `bonus/baseline_gemm.c` 和 `bonus/bonus_gemm.c` 后，在登录节点进入仓库根目录提交，不要在登录节点直接运行一键测试脚本：
+
+```bash
+cd ~/SJTU-CS2315-lab2
+mkdir -p results
+sbatch slurm/lab2-10-bonus.slurm
+
+# 或传入 b、重复次数和矩阵尺寸：
+sbatch slurm/lab2-10-bonus.slurm 32 7 128 512 1024
+```
+
+脚本默认申请 CPU 队列的 1 个节点、1 个进程、1 个 CPU 核心、3 小时，在计算节点编译，通过小规模检查后才开始性能测量。测量通过 `srun --cpu-bind=cores` 运行。默认参数与本地一键脚本相同，结果保存到 `results/bonus-作业编号/`，任务总日志为 `results/lab2-bonus-作业编号.log`。空模板或错误代码会使任务失败，不会继续输出性能结果。
+
+如果平台的 CMake 模块名不是 `cmake`，按 [Slurm 使用说明](slurm/README.md) 设置 `CMAKE_MODULE`。如需本机指令集或已安装的系统 BLAS，可在提交前分别 `export BONUS_NATIVE=ON` 或 `export BONUS_SYSTEM_BLAS=ON`；系统库所需模块也应提前加载并确认能在计算节点使用。不要上传本地的 `build-bonus/`。
+
+### 10.4 Bonus 提交内容
+
+除基础作业外，提交 `bonus/` 中的代码及新增辅助文件，在 PDF 报告末尾附上 Bonus 的优化思路、正确性结果和小/中/大规模性能对比。说明 AI 工具、关键提示词以及你如何检查和修正其建议。

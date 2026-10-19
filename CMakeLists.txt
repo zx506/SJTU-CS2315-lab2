@@ -130,3 +130,10 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME framework_correctness_pipeline COMMAND framework_util_selftest)
 endif()
+
+# Optional Bonus driver, independent of the student's basic src/mygemm.c.
+option(LAB_BUILD_BONUS "Build the single-thread Bonus benchmark" OFF)
+option(LAB_BONUS_NATIVE "Use -march=native for the Bonus and bundled BLAS" OFF)
+if(LAB_BUILD_BONUS)
+    add_subdirectory(bonus)
+endif()
